@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Soltura — Test audio Gemini</title>
+</head>
+
+<body>
+  <h1>Soltura — Test micro → Gemini</h1>
+
+  <button id="connect">1. Connexion Gemini</button>
+  <button id="talk" disabled>2. Parler</button>
+  <button id="finish" disabled>3. Terminer</button>
+
+  <pre id="log">Prêt.</pre>
+
+<script>
+const connectButton = document.getElementById("connect");
+const talkButton = document.getElementById("talk");
+const finishButton = document.getElementById("finish");
+const log = document.getElementById("log");
+
+let socket = null;
+let stream = null;
+let audioContext = null;
+let source = null;
+let processor = null;
+
+function write(message) {
+  log.textContent += "\n" + message;
+}
+
+function floatTo16BitPCM(float32Array) {
+  const buffer = new ArrayBuffer(float32Array.length * 2);
+  const view = new DataView(buffer);
+
+  for (let i = 0; i < float32Array.length; i++) {
+    let sample = Math.max(-1, Math.min(1, float32Array[i]));
+    sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+    view.setInt16(i * 2, sample, true);
+  }
+
+  return new Uint8Array(buffer);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+
+  return btoa(binary);
+}
+
+connectButton.addEventListener("click", async () => {
+  try {
+    connectButton.disabled = true;
+
+    write("Demande du jeton...");
+    const response =
+      await fetch("http://localhost:3000/gemini-token");
+
+    const tokenData = await response.json();
+
+    if (!tokenData.token) {
+      write("❌ Jeton absent.");
+      connectButton.disabled = false;
+      return;
+    }
+
+    write("Jeton reçu.");
+
+    const endpoint =
+      "wss://generativelanguage.googleapis.com/ws/" +
+      "google.ai.generativelanguage.v1beta." +
+      "GenerativeService.BidiGenerateContentConstrained" +
+      "?access_token=" +
+      encodeURIComponent(tokenData.token);
+
+    socket = new WebSocket(endpoint);
+
+    socket.onopen = () => {
+      write("WebSocket ouvert.");
+
+      const setup = {
+        setup: {
+          model: "models/gemini-3.8-live",
+
+          generationConfig: {
+            responseModalities: ["AUDIO"]
+          },
+
+          realtimeInputConfig: {
+            automaticActivityDetection: {
+              disabled: true
+            }
+          },
+
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+
+          systemInstruction: {
+            parts: [{
+              text:
+                "Tu es Soltura, professeur particulier " +
+                "d'espagnol d'Espagne. Réponds brièvement, " +
+                "naturellement et principalement en espagnol."
+            }]
+          }
+        }
+      };
+
+      socket.send(JSON.stringify(setup));
+      write("Configuration envoyée.");
+    };
+
+    socket.onmessage = async (event) => {
+      try {
+        let raw;
+
+        if (event.data instanceof Blob) {
+          raw = await event.data.text();
+        } else if (event.data instanceof ArrayBuffer) {
+          raw = new TextDecoder().decode(event.data);
+        } else {
+          raw = event.data;
+        }
+
+        const data = JSON.parse(raw);
+
+        if (data.setupComplete) {
+          write("✅ Gemini Live prêt.");
+          talkButton.disabled = false;
+        }
+
+        const inputText =
+          data.serverContent?.inputTranscription?.text;
+
+        if (inputText) {
+          write("Moi (compris) : " + inputText);
+        }
+
+        const outputText =
+          data.serverContent?.outputTranscription?.text;
+
+        if (outputText) {
+          write("Gemini : " + outputText);
+        }
+
+        if (data.serverContent?.turnComplete) {
+          write("— réponse terminée —");
+          talkButton.disabled = false;
+        }
+
+      } catch (error) {
+        console.error(error);
+        write("❌ Message Gemini impossible à décoder.");
+      }
+    };
+
+    socket.onclose = event => {
+      write(
+        "Connexion fermée : " +
+        event.code +
+        (event.reason ? " — " + event.reason : "")
+      );
+
+      connectButton.disabled = false;
+      talkButton.disabled = true;
+      finishButton.disabled = true;
+    };
+
+    socket.onerror = error => {
+      console.error(error);
+      write("❌ Erreur WebSocket.");
+    };
+
+  } catch (error) {
+    console.error(error);
+    write("❌ " + error.message);
+    connectButton.disabled = false;
+  }
+});
+
+talkButton.addEventListener("click", async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true
+      }
+    });
+
+    audioContext = new AudioContext({
+      sampleRate: 16000
+    });
+
+    source = audioContext.createMediaStreamSource(stream);
+
+    processor = audioContext.createScriptProcessor(
+      2048,
+      1,
+      1
+    );
+
+    socket.send(JSON.stringify({
+      realtimeInput: {
+        activityStart: {}
+      }
+    }));
+
+    processor.onaudioprocess = event => {
+      if (!socket ||
+          socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      const samples =
+        event.inputBuffer.getChannelData(0);
+
+      const pcm = floatTo16BitPCM(samples);
+      const base64 = bytesToBase64(pcm);
+
+      socket.send(JSON.stringify({
+        realtimeInput: {
+          audio: {
+            data: base64,
+            mimeType:
+              "audio/pcm;rate=" +
+              audioContext.sampleRate
+          }
+        }
+      }));
+    };
+
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+
+    talkButton.disabled = true;
+    finishButton.disabled = false;
+
+    write(
+      "🎙 Micro actif à " +
+      audioContext.sampleRate +
+      " Hz — parle maintenant."
+    );
+
+  } catch (error) {
+    console.error(error);
+    write("❌ Micro : " + error.message);
+  }
+});
+
+finishButton.addEventListener("click", async () => {
+  finishButton.disabled = true;
+
+  if (processor) {
+    processor.disconnect();
+    processor = null;
+  }
+
+  if (source) {
+    source.disconnect();
+    source = null;
+  }
+
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+
+  if (audioContext) {
+    await audioContext.close();
+    audioContext = null;
+  }
+
+  socket.send(JSON.stringify({
+    realtimeInput: {
+      activityEnd: {}
+    }
+  }));
+
+  write("⏹ Terminer envoyé — attente de Gemini...");
+});
+</script>
+
+</body>
+</html>
