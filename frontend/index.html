@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Soltura — POC vocal V0</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <main class="app">
+    <header>
+      <h1>Soltura</h1>
+      <p>POC vocal V0</p>
+    </header>
+
+    <section>
+      <h2>Moteur</h2>
+
+      <label>
+        <input type="radio" name="engine" value="openai" checked>
+        OpenAI
+      </label>
+
+      <label>
+        <input type="radio" name="engine" value="gemini">
+        Gemini
+      </label>
+    </section>
+
+    <section>
+      <h2>Réponse</h2>
+
+      <label>
+        <input type="radio" name="responseMode" value="text" checked>
+        Texte
+      </label>
+
+      <label>
+        <input type="radio" name="responseMode" value="voice">
+        Voix
+      </label>
+    </section>
+
+    <section class="controls">
+      <button id="talkButton">🎙 Parler</button>
+      <button id="finishButton" disabled>Terminer</button>
+      <button id="stopButton" disabled>Stop</button>
+    </section>
+
+    <section>
+      <h2>État</h2>
+      <div id="status" class="box status">Prêt</div>
+    </section>
+
+    <section>
+      <h2>Transcription</h2>
+      <div id="transcription" class="box">
+        La transcription apparaîtra ici.
+      </div>
+    </section>
+
+    <section>
+      <h2>Réponse</h2>
+      <div id="response" class="box">
+        La réponse apparaîtra ici.
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

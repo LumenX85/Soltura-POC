@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Soltura — Test Gemini Live</title>
+</head>
+
+<body>
+  <h1>Test Gemini Live</h1>
+
+  <button id="connect">Connexion Gemini</button>
+  <button id="send" disabled>Envoyer test espagnol</button>
+
+  <pre id="log">Prêt.</pre>
+
+  <script>
+    const connectButton = document.getElementById("connect");
+    const sendButton = document.getElementById("send");
+    const log = document.getElementById("log");
+
+    let socket = null;
+
+    function write(message) {
+      log.textContent += "\n" + message;
+    }
+
+    connectButton.addEventListener("click", async () => {
+      try {
+        connectButton.disabled = true;
+
+        write("Demande d'un jeton éphémère...");
+
+        const tokenResponse =
+          await fetch("http://localhost:3000/gemini-token");
+
+        const tokenData = await tokenResponse.json();
+
+        if (!tokenData.token) {
+          write("❌ Jeton absent.");
+          console.error(tokenData);
+          connectButton.disabled = false;
+          return;
+        }
+
+        write("Jeton reçu.");
+        write("Connexion WebSocket...");
+
+        const endpoint =
+          "wss://generativelanguage.googleapis.com/ws/" +
+          "google.ai.generativelanguage.v1beta." +
+          "GenerativeService.BidiGenerateContentConstrained" +
+          "?access_token=" +
+          encodeURIComponent(tokenData.token);
+
+        socket = new WebSocket(endpoint);
+
+        socket.onopen = () => {
+          write("WebSocket ouvert.");
+          write("Envoi de la configuration...");
+
+          const setupMessage = {
+            setup: {
+              model: "models/gemini-3.8-live",
+
+              generationConfig: {
+                responseModalities: ["AUDIO"]
+              },
+
+              systemInstruction: {
+                parts: [{
+                  text:
+                    "Tu es Soltura, un assistant pédagogique " +
+                    "pour apprendre l'espagnol d'Espagne. " +
+                    "Réponds brièvement et naturellement en espagnol."
+                }]
+              }
+            }
+          };
+
+          socket.send(JSON.stringify(setupMessage));
+        };
+
+        socket.onmessage = async (event) => {
+          try {
+            let rawData;
+
+            if (event.data instanceof Blob) {
+              rawData = await event.data.text();
+            } else if (event.data instanceof ArrayBuffer) {
+              rawData = new TextDecoder().decode(event.data);
+            } else {
+              rawData = event.data;
+            }
+
+            const data = JSON.parse(rawData);
+
+            console.log("Gemini :", data);
+
+            if (data.setupComplete) {
+              write("✅ Session Gemini Live prête.");
+              sendButton.disabled = false;
+            }
+
+            const transcription =
+              data.serverContent?.outputTranscription?.text;
+
+            if (transcription) {
+              write("Gemini : " + transcription);
+            }
+
+            if (data.serverContent?.turnComplete) {
+              write("— réponse terminée —");
+            }
+
+          } catch (error) {
+            console.error(
+              "Erreur lecture message Gemini :",
+              error,
+              event.data
+            );
+
+            write(
+              "❌ Message Gemini reçu mais impossible à décoder."
+            );
+          }
+        };
+
+        socket.onerror = (error) => {
+          console.error("Erreur WebSocket :", error);
+          write("❌ Erreur WebSocket.");
+        };
+
+        socket.onclose = (event) => {
+          write(
+            "Connexion fermée : " +
+            event.code +
+            (event.reason ? " — " + event.reason : "")
+          );
+
+          sendButton.disabled = true;
+          connectButton.disabled = false;
+        };
+
+      } catch (error) {
+        console.error(error);
+
+        write("❌ Erreur : " + error.message);
+
+        connectButton.disabled = false;
+      }
+    });
+
+    sendButton.addEventListener("click", () => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        write("❌ WebSocket non disponible.");
+        return;
+      }
+
+      const message = {
+        clientContent: {
+          turns: [{
+            role: "user",
+            parts: [{
+              text:
+                "Hola. Estoy probando Soltura. " +
+                "¿Puedes responderme con una frase breve?"
+            }]
+          }],
+
+          turnComplete: true
+        }
+      };
+
+      socket.send(JSON.stringify(message));
+
+      write(
+        "Moi : Hola. Estoy probando Soltura. " +
+        "¿Puedes responderme con una frase breve?"
+      );
+    });
+  </script>
+</body>
+</html>
