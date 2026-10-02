@@ -121,7 +121,11 @@ async function getToken() {
   write("Demande du jeton...");
 
   const response =
-    await fetch("http://localhost:3000/gemini-token");
+    await fetch(
+      "http://" +
+      window.location.hostname +
+      ":3000/gemini-token"
+    );
 
   const tokenData = await response.json();
 
