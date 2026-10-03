@@ -1,4 +1,16 @@
+# Variables d'environnement et secrets
 .env
+.env.*
 backend/.env
+
+# Dépendances Node.js
 node_modules/
 backend/node_modules/
+
+# Sauvegardes temporaires
+*.bak
+
+# Certificats et clés privées du POC
+certs/
+*.pem
+*.key
