@@ -195,9 +195,7 @@ async function getToken() {
 
   const response =
     await fetch(
-      "http://" +
-      window.location.hostname +
-      ":3000/gemini-token"
+      "/gemini-token"
     );
 
   const tokenData = await response.json();

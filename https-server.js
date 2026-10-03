@@ -27,6 +27,34 @@ const server = https.createServer(
   options,
   (req, res) => {
 
+    if (req.url === "/gemini-token") {
+      const proxyRequest = require("http").get(
+        "http://127.0.0.1:3000/gemini-token",
+        proxyResponse => {
+          res.writeHead(
+            proxyResponse.statusCode || 500,
+            proxyResponse.headers
+          );
+
+          proxyResponse.pipe(res);
+        }
+      );
+
+      proxyRequest.on("error", error => {
+        console.error("Erreur proxy :", error);
+
+        res.writeHead(502, {
+          "Content-Type": "application/json"
+        });
+
+        res.end(JSON.stringify({
+          error: "Backend Soltura inaccessible"
+        }));
+      });
+
+      return;
+    }
+
     let requestedPath =
       req.url === "/"
         ? "/index.html"
