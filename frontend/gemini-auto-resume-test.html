@@ -403,13 +403,32 @@ async function openGeminiConnection(resume = false) {
   };
 
   socket.onclose = async event => {
+    let connectionDuration = "inconnue";
+
+    if (socketOpenedAt) {
+      const totalSeconds =
+        Math.round((Date.now() - socketOpenedAt) / 1000);
+
+      const minutes =
+        Math.floor(totalSeconds / 60);
+
+      const seconds =
+        totalSeconds % 60;
+
+      connectionDuration =
+        minutes + " min " + seconds + " s";
+    }
+
     write(
-      "Connexion fermée : " +
+      "🔌 Connexion fermée : " +
       event.code +
       (event.reason
         ? " — " + event.reason
-        : "")
+        : "") +
+      " — durée : " + connectionDuration
     );
+
+    socketOpenedAt = null;
 
     talkButton.disabled = true;
     finishButton.disabled = true;
