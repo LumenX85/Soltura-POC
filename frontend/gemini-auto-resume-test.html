@@ -96,6 +96,10 @@ const resumeButton = document.getElementById("resume");
 const log = document.getElementById("log");
 
 let socket = null;
+
+// Diagnostic de session
+let socketOpenedAt = null;
+let audioReceivedThisTurn = false;
 let sessionHandle = null;
 let intentionalCloseForResume = false;
 
@@ -108,7 +112,17 @@ let outputContext = null;
 let nextPlaybackTime = 0;
 
 function write(message) {
-  log.textContent += "\n" + message;
+  const now = new Date();
+
+  const time =
+    now.toLocaleTimeString("fr-FR", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+
+  log.textContent +=
+    "\n[" + time + "] " + message;
 }
 
 function floatTo16BitPCM(float32Array) {
@@ -222,6 +236,7 @@ async function openGeminiConnection(resume = false) {
   socket = new WebSocket(endpoint);
 
   socket.onopen = () => {
+    socketOpenedAt = Date.now();
     write(
       resume
         ? "♻️ Nouveau WebSocket ouvert pour reprise."
@@ -363,7 +378,12 @@ async function openGeminiConnection(resume = false) {
       if (content?.modelTurn?.parts) {
         for (const part of content.modelTurn.parts) {
           if (part.inlineData?.data) {
-            playPCM(part.inlineData.data);
+            if (!audioReceivedThisTurn) {
+            write("🔊 Audio Gemini reçu.");
+            audioReceivedThisTurn = true;
+          }
+
+          playPCM(part.inlineData.data);
           }
         }
       }
