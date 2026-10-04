@@ -390,6 +390,7 @@ async function openGeminiConnection(resume = false) {
 
       if (content?.turnComplete) {
         write("— réponse terminée —");
+        audioReceivedThisTurn = false;
         talkButton.disabled = false;
       }
 
