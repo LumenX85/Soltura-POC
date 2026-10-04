@@ -102,6 +102,7 @@ let socketOpenedAt = null;
 let audioReceivedThisTurn = false;
 let sessionHandle = null;
 let intentionalCloseForResume = false;
+let recoveryAttempted = false;
 
 let inputStream = null;
 let inputContext = null;
@@ -455,6 +456,42 @@ async function openGeminiConnection(resume = false) {
       }
 
       return;
+    }
+
+    if (
+      event.code === 1011 &&
+      sessionHandle &&
+      !recoveryAttempted
+    ) {
+      recoveryAttempted = true;
+
+      write(
+        "⚠️ Fermeture 1011 — tentative unique de récupération."
+      );
+
+      try {
+        await openGeminiConnection(true);
+      } catch (error) {
+        console.error(error);
+
+        write(
+          "❌ Récupération 1011 impossible : " +
+          error.message
+        );
+
+        connectButton.disabled = false;
+      }
+
+      return;
+    }
+
+    if (
+      event.code === 1011 &&
+      recoveryAttempted
+    ) {
+      write(
+        "❌ Nouvelle erreur 1011 après récupération — arrêt."
+      );
     }
 
     connectButton.disabled = false;
