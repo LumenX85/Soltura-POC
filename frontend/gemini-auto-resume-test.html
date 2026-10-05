@@ -103,6 +103,7 @@ let audioReceivedThisTurn = false;
 let sessionHandle = null;
 let intentionalCloseForResume = false;
 let recoveryAttempted = false;
+let waitingForGeminiAt = null;
 
 let inputStream = null;
 let inputContext = null;
@@ -380,7 +381,16 @@ async function openGeminiConnection(resume = false) {
         for (const part of content.modelTurn.parts) {
           if (part.inlineData?.data) {
             if (!audioReceivedThisTurn) {
-            write("🔊 Audio Gemini reçu.");
+            const audioDelay =
+              waitingForGeminiAt
+                ? ((Date.now() - waitingForGeminiAt) / 1000).toFixed(1)
+                : "inconnu";
+
+            write(
+              "🔊 Audio Gemini reçu — attente : " +
+              audioDelay + " s"
+            );
+
             audioReceivedThisTurn = true;
           }
 
@@ -390,7 +400,17 @@ async function openGeminiConnection(resume = false) {
       }
 
       if (content?.turnComplete) {
-        write("— réponse terminée —");
+        const totalDelay =
+          waitingForGeminiAt
+            ? ((Date.now() - waitingForGeminiAt) / 1000).toFixed(1)
+            : "inconnu";
+
+        write(
+          "— réponse terminée — durée totale : " +
+          totalDelay + " s"
+        );
+
+        waitingForGeminiAt = null;
         audioReceivedThisTurn = false;
         talkButton.disabled = false;
       }
@@ -632,6 +652,7 @@ talkButton.addEventListener("click", async () => {
 
 finishButton.addEventListener("click", async () => {
   finishButton.disabled = true;
+  waitingForGeminiAt = Date.now();
 
   if (inputProcessor) {
     inputProcessor.disconnect();
