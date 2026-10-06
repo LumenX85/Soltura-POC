@@ -361,6 +361,7 @@ async function openGeminiConnection(resume = false) {
         );
 
         talkButton.disabled = false;
+        write("🟢 État Soltura : PRÊT");
       }
 
       if (content?.inputTranscription?.text) {
@@ -385,6 +386,8 @@ async function openGeminiConnection(resume = false) {
               waitingForGeminiAt
                 ? ((Date.now() - waitingForGeminiAt) / 1000).toFixed(1)
                 : "inconnu";
+
+            write("🔊 État Soltura : RÉPONSE GEMINI");
 
             write(
               "🔊 Audio Gemini reçu — attente : " +
@@ -413,6 +416,7 @@ async function openGeminiConnection(resume = false) {
         waitingForGeminiAt = null;
         audioReceivedThisTurn = false;
         talkButton.disabled = false;
+        write("🟢 État Soltura : PRÊT");
       }
 
     } catch (error) {
@@ -454,6 +458,7 @@ async function openGeminiConnection(resume = false) {
 
     talkButton.disabled = true;
     finishButton.disabled = true;
+    write("🔴 État Soltura : CONNEXION INTERROMPUE");
 
     if (intentionalCloseForResume) {
       intentionalCloseForResume = false;
@@ -633,6 +638,7 @@ talkButton.addEventListener("click", async () => {
 
     talkButton.disabled = true;
     finishButton.disabled = false;
+    write("🎙️ État Soltura : ÉCOUTE");
 
     write(
       "🎙 Micro actif à " +
@@ -653,6 +659,7 @@ talkButton.addEventListener("click", async () => {
 finishButton.addEventListener("click", async () => {
   finishButton.disabled = true;
   waitingForGeminiAt = Date.now();
+  write("🟠 État Soltura : ATTENTE GEMINI");
 
   if (inputProcessor) {
     inputProcessor.disconnect();
