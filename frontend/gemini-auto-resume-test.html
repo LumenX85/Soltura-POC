@@ -86,6 +86,9 @@
 <button id="finish" disabled>3. Terminer</button>
 <button id="resume" disabled>4. Tester la reprise</button>
 
+<button id="export-log" type="button">Exporter le journal</button>
+<p>Export local manuel. Le journal contient les transcriptions : vérifiez-le avant de le partager.</p>
+
 <pre id="log">Prêt.</pre>
 
 <script>
@@ -113,19 +116,105 @@ let inputProcessor = null;
 let outputContext = null;
 let nextPlaybackTime = 0;
 
-function write(message) {
-  const now = new Date();
+// Journal local : aucun message de protocole ni contenu audio conservé.
+const journal = [];
+const journalStartedAt = performance.now();
+const privateValues = new Set();
+let connectionSequence = 0;
+let turnSequence = 0;
+let captureSequence = 0;
+let activeConnectionId = 0;
+let activeTurnId = 0;
+let activeCaptureId = 0;
+let captureStartedAt = null;
+let sessionStartedAt = null;
 
-  const time =
-    now.toLocaleTimeString("fr-FR", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-
-  log.textContent +=
-    "\n[" + time + "] " + message;
+function redact(message) {
+  let text = String(message);
+  for (const value of privateValues) {
+    if (value) text = text.split(value).join("[secret masqué]");
+  }
+  return text
+    .replace(/AIza[\w-]+/g, "[clé masquée]")
+    .replace(/((?:access_token|api[_-]?key|token|handle)\s*[=:]\s*)[^\s&,;]+/gi,
+      "$1[secret masqué]")
+    .replace(/[\r\n\u2028\u2029]/g, " ");
 }
+
+function write(message, context = {}) {
+  const entry = {
+    sequence: journal.length + 1,
+    timestamp: new Date().toISOString(),
+    elapsedMs: Math.round(performance.now() - journalStartedAt),
+    connection: activeConnectionId,
+    turn: activeTurnId,
+    capture: activeCaptureId,
+    ...context,
+    message: redact(message)
+  };
+  journal.push(entry);
+  log.textContent += "\n" + formatEntry(entry);
+}
+
+const windowDiagnosticWrite = write;
+
+function formatEntry(entry) {
+  return `[${entry.timestamp}] #${entry.sequence} +${entry.elapsedMs}ms ` +
+    `connexion=${entry.connection} tour=${entry.turn} micro=${entry.capture} ` +
+    redact(entry.message);
+}
+
+function buttonState() {
+  return [connectButton, talkButton, finishButton, resumeButton]
+    .map(button => button.id + "=" + (button.disabled ? "désactivé" : "actif"))
+    .join(", ");
+}
+
+new MutationObserver(() => write("Boutons : " + buttonState()))
+  .observe(document.body, { subtree: true, attributes: true, attributeFilter: ["disabled"] });
+
+function safeErrorName(error) {
+  const allowed = ["NotAllowedError", "NotFoundError", "NotReadableError",
+    "AbortError", "SecurityError", "InvalidStateError", "TypeError", "SyntaxError",
+    "OverconstrainedError", "NetworkError"];
+  return allowed.includes(error?.name) ? error.name : "Erreur non détaillée";
+}
+
+function diagnosticSend(target, payload, label, context = {}) {
+  write("Tentative d'envoi : " + label + " ; état WebSocket=" + target?.readyState,
+    context);
+  try {
+    target.send(JSON.stringify(payload));
+    write("Envoi remis au WebSocket : " + label, context);
+  } catch (error) {
+    write("Échec d'envoi : " + label + " ; " + safeErrorName(error), context);
+    throw error;
+  }
+}
+
+document.getElementById("export-log").addEventListener("click", () => {
+  write("Action utilisateur : Exporter le journal ; boutons : " + buttonState());
+  const exportedAt = new Date().toISOString();
+  const text = "Soltura — journal local de diagnostic\n" +
+    "Export UTC : " + exportedAt + "\n" +
+    "Durée depuis le chargement : " + Math.round(performance.now() - journalStartedAt) +
+    " ms\nLes envois journalisés ne prouvent pas leur réception par Gemini.\n\n" +
+    journal.map(formatEntry).join("\n") + "\n";
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "soltura-journal-" + exportedAt.replace(/[:.]/g, "-") + ".txt";
+  document.body.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+    // Laisser le navigateur consommer l'URL avant de la libérer.
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+});
+write("Journal initialisé ; boutons : " + buttonState());
 
 function floatTo16BitPCM(float32Array) {
   const buffer = new ArrayBuffer(float32Array.length * 2);
@@ -166,7 +255,8 @@ function base64ToInt16(base64) {
   return new Int16Array(buffer);
 }
 
-function playPCM(base64Audio) {
+function playPCM(base64Audio, context = {}) {
+  write("Bloc audio reçu (contenu non journalisé)", context);
   if (!outputContext) {
     outputContext = new AudioContext({
       sampleRate: 24000
@@ -200,6 +290,12 @@ function playPCM(base64Audio) {
     nextPlaybackTime
   );
 
+  source.addEventListener("ended", () => {
+    write("Fin de lecture observable du bloc audio", context);
+  });
+  write("Lecture programmée : durée=" + Math.round(audioBuffer.duration * 1000) +
+    " ms ; délai=" + Math.round((startTime - outputContext.currentTime) * 1000) +
+    " ms ; contexte=" + outputContext.state, context);
   source.start(startTime);
 
   nextPlaybackTime =
@@ -207,6 +303,7 @@ function playPCM(base64Audio) {
 }
 
 async function getToken() {
+  const tokenRequestedAt = performance.now();
   write("Demande du jeton...");
 
   const response =
@@ -214,6 +311,8 @@ async function getToken() {
       "/gemini-token"
     );
 
+  write("Réponse du service de jeton : HTTP " + response.status +
+    " ; délai=" + Math.round(performance.now() - tokenRequestedAt) + " ms");
   const tokenData = await response.json();
 
   if (!tokenData.token) {
@@ -222,10 +321,17 @@ async function getToken() {
 
   write("Jeton reçu.");
 
+  privateValues.add(tokenData.token);
   return tokenData.token;
 }
 
 async function openGeminiConnection(resume = false) {
+  const connectionId = ++connectionSequence;
+  activeConnectionId = connectionId;
+  const requestedAt = performance.now();
+  let openedAt = null;
+  const write = message => windowDiagnosticWrite(message, { connection: connectionId });
+  write("Tentative de connexion ; reprise=" + resume);
   const token = await getToken();
 
   const endpoint =
@@ -238,6 +344,8 @@ async function openGeminiConnection(resume = false) {
   socket = new WebSocket(endpoint);
 
   socket.onopen = () => {
+    openedAt = performance.now();
+    write("Ouverture WebSocket ; délai=" + Math.round(openedAt - requestedAt) + " ms");
     socketOpenedAt = Date.now();
     write(
       resume
@@ -282,7 +390,10 @@ async function openGeminiConnection(resume = false) {
       }
     };
 
-    socket.send(JSON.stringify(setup));
+    diagnosticSend(socket, setup, "configuration", { connection: connectionId });
+    write("Configuration : modèle=" + setup.setup.model +
+      " ; AUDIO ; détection automatique désactivée ; transcriptions activées ; reprise=" +
+      Boolean(resume && sessionHandle));
 
     write(
       resume
@@ -312,7 +423,11 @@ async function openGeminiConnection(resume = false) {
         const update =
           data.sessionResumptionUpdate;
 
+        write("Disponibilité de reprise : " + Boolean(update.resumable) +
+          " ; nouveau handle présent=" + Boolean(update.newHandle));
+
         if (update.newHandle) {
+          privateValues.add(update.newHandle);
           sessionHandle = update.newHandle;
 
           write(
@@ -330,7 +445,8 @@ async function openGeminiConnection(resume = false) {
           "⏳ GoAway reçu" +
           (data.goAway.timeLeft
             ? " — temps restant : " +
-              data.goAway.timeLeft
+              (typeof data.goAway.timeLeft === "string" && /^\d+(?:\.\d+)?s$/.test(data.goAway.timeLeft)
+                ? data.goAway.timeLeft : "non exploitable")
             : "")
         );
 
@@ -354,6 +470,8 @@ async function openGeminiConnection(resume = false) {
       }
 
       if (data.setupComplete) {
+        write("setupComplete ; délai depuis ouverture=" +
+          (openedAt === null ? "inconnu" : Math.round(performance.now() - openedAt) + " ms"));
         write(
           resume
             ? "✅ Session Gemini reprise et prête."
@@ -397,12 +515,13 @@ async function openGeminiConnection(resume = false) {
             audioReceivedThisTurn = true;
           }
 
-          playPCM(part.inlineData.data);
+          playPCM(part.inlineData.data, { connection: connectionId, turn: activeTurnId, capture: activeCaptureId });
           }
         }
       }
 
       if (content?.turnComplete) {
+        write("turnComplete");
         const totalDelay =
           waitingForGeminiAt
             ? ((Date.now() - waitingForGeminiAt) / 1000).toFixed(1)
@@ -420,15 +539,18 @@ async function openGeminiConnection(resume = false) {
       }
 
     } catch (error) {
-      console.error(error);
+      // Ne pas afficher des objets externes pouvant contenir des secrets.
 
-      write(
-        "❌ Erreur de traitement Gemini."
-      );
+      write("❌ Erreur de traitement Gemini ou de lecture audio : " + safeErrorName(error));
     }
   };
 
   socket.onclose = async event => {
+    write("Fermeture WebSocket : code=" + event.code + " ; propre=" + event.wasClean +
+      " ; durée connexion=" + (openedAt === null ? "inconnue" :
+        Math.round(performance.now() - openedAt) + " ms"));
+    write("Durée session depuis Connexion=" +
+      (sessionStartedAt === null ? "inconnue" : Math.round(performance.now() - sessionStartedAt) + " ms"));
     let connectionDuration = "inconnue";
 
     if (socketOpenedAt) {
@@ -448,9 +570,7 @@ async function openGeminiConnection(resume = false) {
     write(
       "🔌 Connexion fermée : " +
       event.code +
-      (event.reason
-        ? " — " + event.reason
-        : "") +
+      " — motif distant omis (confidentialité)" +
       " — durée : " + connectionDuration
     );
 
@@ -470,11 +590,11 @@ async function openGeminiConnection(resume = false) {
       try {
         await openGeminiConnection(true);
       } catch (error) {
-        console.error(error);
+        // Ne pas afficher des objets externes pouvant contenir des secrets.
 
         write(
           "❌ Reprise impossible : " +
-          error.message
+          "détails omis (confidentialité)"
         );
 
         connectButton.disabled = false;
@@ -497,11 +617,11 @@ async function openGeminiConnection(resume = false) {
       try {
         await openGeminiConnection(true);
       } catch (error) {
-        console.error(error);
+        // Ne pas afficher des objets externes pouvant contenir des secrets.
 
         write(
           "❌ Récupération 1011 impossible : " +
-          error.message
+          "détails omis (confidentialité)"
         );
 
         connectButton.disabled = false;
@@ -523,12 +643,14 @@ async function openGeminiConnection(resume = false) {
   };
 
   socket.onerror = error => {
-    console.error(error);
+    // Ne pas afficher des objets externes pouvant contenir des secrets.
     write("❌ Erreur WebSocket.");
   };
 }
 
 connectButton.addEventListener("click", async () => {
+  sessionStartedAt = performance.now();
+  write("Action utilisateur : Connexion ; boutons : " + buttonState());
   try {
     connectButton.disabled = true;
 
@@ -537,15 +659,16 @@ connectButton.addEventListener("click", async () => {
     await openGeminiConnection(false);
 
   } catch (error) {
-    console.error(error);
+    // Ne pas afficher des objets externes pouvant contenir des secrets.
 
-    write("❌ " + error.message);
+    write("❌ Connexion impossible : " + safeErrorName(error));
 
     connectButton.disabled = false;
   }
 });
 
 resumeButton.addEventListener("click", () => {
+  write("Action utilisateur : Reprise ; boutons : " + buttonState());
   if (
     !sessionHandle ||
     !socket ||
@@ -570,6 +693,15 @@ resumeButton.addEventListener("click", () => {
 });
 
 talkButton.addEventListener("click", async () => {
+  activeTurnId = ++turnSequence;
+  activeCaptureId = ++captureSequence;
+  const captureId = activeCaptureId;
+  const captureConnectionId = activeConnectionId;
+  const turnId = activeTurnId;
+  const microphoneRequestedAt = performance.now();
+  captureStartedAt = microphoneRequestedAt;
+  write("Action utilisateur : Parler ; boutons : " + buttonState());
+  write("Demande de démarrage microphone");
   try {
     inputStream =
       await navigator.mediaDevices.getUserMedia({
@@ -580,6 +712,10 @@ talkButton.addEventListener("click", async () => {
         }
       });
 
+    write("Accès microphone obtenu ; délai=" +
+      Math.round(performance.now() - microphoneRequestedAt) + " ms");
+    inputStream.getTracks().forEach(track => track.addEventListener("ended", () =>
+      write("Microphone : piste terminée par le navigateur", { connection: captureConnectionId, capture: captureId, turn: turnId })));
     inputContext = new AudioContext({
       sampleRate: 16000
     });
@@ -596,17 +732,15 @@ talkButton.addEventListener("click", async () => {
         1
       );
 
-    socket.send(JSON.stringify({
-      realtimeInput: {
-        activityStart: {}
-      }
-    }));
+    diagnosticSend(socket, { realtimeInput: { activityStart: {} } }, "activityStart");
 
     inputProcessor.onaudioprocess = event => {
+      try {
       if (
         !socket ||
         socket.readyState !== WebSocket.OPEN
       ) {
+        write("Envoi audio ignoré : WebSocket non ouvert", { connection: captureConnectionId, capture: captureId, turn: turnId });
         return;
       }
 
@@ -619,7 +753,7 @@ talkButton.addEventListener("click", async () => {
       const base64 =
         bytesToBase64(pcm);
 
-      socket.send(JSON.stringify({
+      diagnosticSend(socket, {
         realtimeInput: {
           audio: {
             data: base64,
@@ -628,7 +762,12 @@ talkButton.addEventListener("click", async () => {
               inputContext.sampleRate
           }
         }
-      }));
+      }, "bloc audio ; échantillons=" + samples.length, { connection: captureConnectionId, capture: captureId, turn: turnId });
+      } catch (error) {
+        write("Erreur capture/envoi audio : " + safeErrorName(error),
+          { connection: captureConnectionId, capture: captureId, turn: turnId });
+        throw error;
+      }
     };
 
     inputSource.connect(inputProcessor);
@@ -647,57 +786,63 @@ talkButton.addEventListener("click", async () => {
     );
 
   } catch (error) {
-    console.error(error);
+    // Ne pas afficher des objets externes pouvant contenir des secrets.
 
     write(
-      "❌ Micro : " +
-      error.message
+      "❌ Micro : " + safeErrorName(error)
     );
   }
 });
 
 finishButton.addEventListener("click", async () => {
-  finishButton.disabled = true;
-  waitingForGeminiAt = Date.now();
-  write("🟠 État Soltura : ATTENTE GEMINI");
+  write("Action utilisateur : Terminer ; boutons : " + buttonState());
+  write("Arrêt microphone demandé");
+  try {
+    finishButton.disabled = true;
+    waitingForGeminiAt = Date.now();
+    write("🟠 État Soltura : ATTENTE GEMINI");
 
-  if (inputProcessor) {
-    inputProcessor.disconnect();
-    inputProcessor = null;
+    if (inputProcessor) {
+      inputProcessor.disconnect();
+      inputProcessor = null;
+    }
+
+    if (inputSource) {
+      inputSource.disconnect();
+      inputSource = null;
+    }
+
+    if (inputStream) {
+      inputStream
+        .getTracks()
+        .forEach(track => track.stop());
+
+      inputStream = null;
+    }
+
+    if (inputContext) {
+      await inputContext.close();
+      inputContext = null;
+    }
+
+    if (
+      socket &&
+      socket.readyState === WebSocket.OPEN
+    ) {
+      diagnosticSend(socket, { realtimeInput: { activityEnd: {} } }, "activityEnd");
+    } else {
+      write("activityEnd non envoyé : WebSocket non ouvert");
+    }
+
+    write("Microphone arrêté ; durée depuis demande=" +
+      (captureStartedAt === null ? "inconnue" : Math.round(performance.now() - captureStartedAt) + " ms"));
+    write(
+      "⏹ Terminer envoyé — attente de Gemini..."
+    );
+  } catch (error) {
+    write("Erreur pendant l'arrêt microphone ou activityEnd ; détails omis");
+    throw error;
   }
-
-  if (inputSource) {
-    inputSource.disconnect();
-    inputSource = null;
-  }
-
-  if (inputStream) {
-    inputStream
-      .getTracks()
-      .forEach(track => track.stop());
-
-    inputStream = null;
-  }
-
-  if (inputContext) {
-    await inputContext.close();
-    inputContext = null;
-  }
-
-  if (
-    socket &&
-    socket.readyState === WebSocket.OPEN
-  ) {
-    socket.send(JSON.stringify({
-      realtimeInput: {
-        activityEnd: {}
-      }
-    }));
-  }
-
-  write(
-    "⏹ Terminer envoyé — attente de Gemini..."
-  );
 });
 </script>
 
